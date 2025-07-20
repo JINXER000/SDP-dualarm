@@ -68,9 +68,11 @@ class EquiFormerEnc(nn.Module):
             weight_init='normal',
             pool_method='fpsknn',  # in fps, fpsknn
             n_cam=1,
-            n_proprio=1
+            n_proprio=1,
+            n_robots=1
     ):
         super().__init__()
+        self.n_robots = n_robots
         # -----------------------------------EquiformerV2 GNN Enc--------------------------------
         assert len(max_neighbors) == len(sphere_channels)
         self.max_neighbors = max_neighbors
@@ -230,18 +232,36 @@ class EquiFormerEnc(nn.Module):
                     pc[..., :3] += trans_noise
                     break
             if tries == 99:
-                raise 'Can not find valid PCD noise, tried={} times'.format(tries)
+                raise ValueError('Can not find valid PCD noise, tried={} times'.format(tries))
 
-        ee_quat_xyzw = nobs["robot0_eef_quat"]  # [(b t) 4]
-        ee_q = nobs["robot0_gripper_qpos"]  # [(b t) 2]
-        ee_q = rearrange(ee_q, '(b t) n -> b (n t)', t=self.n_proprio)
-        ee_pose = nobs["robot0_eef_pos"]  # [(b t) 3]
-        ee_pose = rearrange(ee_pose, '(b t) d -> b d t', t=self.n_proprio).clone()
+        # Process robot0 data
+        ee_quat_xyzw_0 = nobs["robot0_eef_quat"]  # [(b t) 4]
+        ee_q_0 = nobs["robot0_gripper_qpos"]  # [(b t) 2]
+        ee_q_0 = rearrange(ee_q_0, '(b t) n -> b (n t)', t=self.n_proprio)
+        ee_pose_0 = nobs["robot0_eef_pos"]  # [(b t) 3]
+        ee_pose_0 = rearrange(ee_pose_0, '(b t) d -> b d t', t=self.n_proprio).clone()
+        
+        # Process robot1 data (if available)
+        ee_quat_xyzw_1 = nobs.get("robot1_eef_quat", None)  # [(b t) 4]
+        ee_q_1 = nobs.get("robot1_gripper_qpos", None)  # [(b t) 2]
+        ee_pose_1 = nobs.get("robot1_eef_pos", None)  # [(b t) 3]
+        
+        if ee_quat_xyzw_1 is not None:
+            ee_q_1 = rearrange(ee_q_1, '(b t) n -> b (n t)', t=self.n_proprio)
+            ee_pose_1 = rearrange(ee_pose_1, '(b t) d -> b d t', t=self.n_proprio).clone()
+        
         batch_size, num_points, _ = pc.shape  # (b t) n d
         xyzrgb = rearrange(pc, "b npts d -> (b npts) d")
-        # ee_quat_xyzw = rearrange(ee_quat, "b t d -> (b t) d")
-        ee_rot_vec = pytorch3d_transforms.quaternion_to_matrix(ee_quat_xyzw[:, (3, 0, 1, 2)])  # [(b t) 3 3]
-        ee_rot_vec = rearrange(ee_rot_vec, "(b t) c d -> b c (t d)", t=self.n_proprio)
+        
+        # Convert quaternions to rotation matrices for both robots
+        ee_rot_vec_0 = pytorch3d_transforms.quaternion_to_matrix(ee_quat_xyzw_0[:, (3, 0, 1, 2)])  # [(b t) 3 3]
+        ee_rot_vec_0 = rearrange(ee_rot_vec_0, "(b t) c d -> b c (t d)", t=self.n_proprio)
+        
+        if ee_quat_xyzw_1 is not None:
+            ee_rot_vec_1 = pytorch3d_transforms.quaternion_to_matrix(ee_quat_xyzw_1[:, (3, 0, 1, 2)])  # [(b t) 3 3]
+            ee_rot_vec_1 = rearrange(ee_rot_vec_1, "(b t) c d -> b c (t d)", t=self.n_proprio)
+        else:
+            ee_rot_vec_1 = None
 
         # removing up to 24 duplicate points
         # xyz = pcd.reshape(B * T, -1, 3).clone()
@@ -351,10 +371,25 @@ class EquiFormerEnc(nn.Module):
             node_dst.embedding = self.norm(node_dst.embedding)
 
         s2_feat = node_dst.embedding
-        proprio = torch.zeros_like(s2_feat[..., :4 * self.n_proprio])
-        proprio[:, 1:4, :3 * self.n_proprio] = ee_rot_vec  # 3x type1 irrep
-        proprio[:, 1:4, -self.n_proprio:] = ee_pose  # 1x type1 irrep
-        proprio[:, 0, :2 * self.n_proprio] = ee_q  # 2x type2 irrep
+        
+        # Calculate total proprioceptive features needed
+        total_proprio_features = 4 * self.n_proprio * self.n_robots
+        
+        # Create proprioceptive feature tensor
+        proprio = torch.zeros_like(s2_feat[..., :total_proprio_features])
+        
+        # Add robot0 features
+        proprio[:, 1:4, :3 * self.n_proprio] = ee_rot_vec_0  # 3x type1 irrep
+        proprio[:, 1:4, 3 * self.n_proprio:4 * self.n_proprio] = ee_pose_0  # 1x type1 irrep
+        proprio[:, 0, :2 * self.n_proprio] = ee_q_0  # 2x type2 irrep
+        
+        # Add robot1 features if available
+        if ee_rot_vec_1 is not None:
+            start_idx = 4 * self.n_proprio
+            proprio[:, 1:4, start_idx:start_idx + 3 * self.n_proprio] = ee_rot_vec_1  # 3x type1 irrep
+            proprio[:, 1:4, start_idx + 3 * self.n_proprio:start_idx + 4 * self.n_proprio] = ee_pose_1  # 1x type1 irrep
+            proprio[:, 0, start_idx:start_idx + 2 * self.n_proprio] = ee_q_1  # 2x type2 irrep
+        
         s2_feat = torch.cat([s2_feat, proprio], dim=-1)
 
         if not sanitycheck:
@@ -367,7 +402,7 @@ class EquiFormerEnc(nn.Module):
             return vector
 
     def output_shape(self):
-        return self.c_dim * self.n_cam + 4 * self.n_proprio  # plus 3 channel rot_mat and 1 channel position
+        return self.c_dim * self.n_cam + 4 * self.n_proprio * self.n_robots  # plus 3 channel rot_mat and 1 channel position per robot
 
     def _init_edge_rot_mat(self, edge_length_vec):
         # return init_edge_rot_mat(edge_length_vec)
@@ -418,10 +453,22 @@ if __name__ == "__main__":
     ee_pose = torch.rand(bs * T, 3) - 0.5
     ee_pose = ee_pose.to(device)
     ee_q = torch.ones(bs * T, 2).to(device)
-    nobs = {"point_cloud": pc,  # [(b t) n_pts xyzrgb]
-            "robot0_eef_quat": ee_quat_xyzw,  # [(b t) 4]
-            "robot0_gripper_qpos": ee_q,  # [(b t) 2]
-            "robot0_eef_pos": ee_pose}  # [(b t) 3]
+    
+    # Test for single robot (robot0 only)
+    nobs_single = {"point_cloud": pc,  # [(b t) n_pts xyzrgb]
+                   "robot0_eef_quat": ee_quat_xyzw,  # [(b t) 4]
+                   "robot0_gripper_qpos": ee_q,  # [(b t) 2]
+                   "robot0_eef_pos": ee_pose}  # [(b t) 3]
+    
+    # Test for dual robots (robot0 + robot1)
+    nobs_dual = {"point_cloud": pc,  # [(b t) n_pts xyzrgb]
+                 "robot0_eef_quat": ee_quat_xyzw,  # [(b t) 4]
+                 "robot0_gripper_qpos": ee_q,  # [(b t) 2]
+                 "robot0_eef_pos": ee_pose,  # [(b t) 3]
+                 "robot1_eef_quat": ee_quat_xyzw,  # [(b t) 4]
+                 "robot1_gripper_qpos": ee_q,  # [(b t) 2]
+                 "robot1_eef_pos": ee_pose}  # [(b t) 3]
+    
     model = EquiFormerEnc(
         c_dim=64,
         lmax=1,
@@ -436,8 +483,17 @@ if __name__ == "__main__":
     c4_rots[:, -1] = torch.arange(4) * np.pi / 2
     print("Vision params: %e" % model.num_params)
 
-    out = model(nobs, sanitycheck=True)
+    # Test single robot
+    out_single = model(nobs_single, sanitycheck=True)
+    print(f"Single robot output shape: {out_single.shape}")
+    print(f"Expected output shape (single): {model.output_shape(n_robots=1)}")
 
+    # Test dual robots
+    out_dual = model(nobs_dual, sanitycheck=True)
+    print(f"Dual robot output shape: {out_dual.shape}")
+    print(f"Expected output shape (dual): {model.output_shape(n_robots=2)}")
+
+    # Test equivariance for single robot
     success = True
     for i in range(c4_rots.shape[0]):
         pc_tfm = pc.clone()
@@ -445,7 +501,7 @@ if __name__ == "__main__":
         rot_mat_tfm = rot_pcd(rot_mat.transpose(1, 2), c4_rots[i]).transpose(1, 2)
         ee_quat_xyzw_tfm = pytorch3d_transforms.matrix_to_quaternion(rot_mat_tfm)[:, [1, 2, 3, 0]]
         ee_pose_tfm = rot_pcd(ee_pose.unsqueeze(1), c4_rots[i]).reshape(bs * T, 3)
-        out_feats_tfm_after = rot_pcd(out, c4_rots[i])
+        out_feats_tfm_after = rot_pcd(out_single, c4_rots[i])
 
         nobs_tfm = {"point_cloud": pc_tfm,  # [(b t) n_pts xyzrgb]
                     "robot0_eef_quat": ee_quat_xyzw_tfm,  # [(b t) 4]
@@ -454,18 +510,17 @@ if __name__ == "__main__":
         out_feats_tfm_before = model(nobs_tfm, sanitycheck=True)
 
         eerr = torch.linalg.norm(out_feats_tfm_before - out_feats_tfm_after, dim=1).max()
-        err = torch.linalg.norm(out_feats_tfm_after - out, dim=1).max()
+        err = torch.linalg.norm(out_feats_tfm_after - out_single, dim=1).max()
         if not torch.allclose(out_feats_tfm_before, out_feats_tfm_after, atol=atol):
             print(f"FAILED on {c4_rots[i]}: {eerr:.1E} > {atol}, {err}")
-            # print(out_feats_tfm_after - out_feats_tfm_after)
             success = False
         else:
             print(f"PASSED on {c4_rots[i]}: {eerr:.1E} < {atol}, {err}")
 
-    # import matplotlib.pyplot as plt
-    # f = plt.figure(figsize=(16, 4))
-    # ax = [f.add_subplot(1, 4, i+1, projection='3d') for i in range(4)]
-    # plt.show()
+    # Test that dual robot output is larger than single robot output
+    print(f"Single robot features: {out_single.shape[-1]}")
+    print(f"Dual robot features: {out_dual.shape[-1]}")
+    print(f"Feature increase: {out_dual.shape[-1] - out_single.shape[-1]} (expected: {4 * model.n_proprio})")
 
     if success:
         print('PASSED')

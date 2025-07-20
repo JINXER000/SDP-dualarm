@@ -79,11 +79,14 @@ class STEP(BasePolicy):
                  norm=True,
                  FiLM_type='SFiLM',
                  pool_method='fpsknn',
+                 num_robots=1,
                  # parameters passed to step
                  **kwargs):
         super().__init__()
 
         self.condition_type = condition_type
+
+        self.num_robots = num_robots
 
         # parse shape_meta
         action_shape = shape_meta['action']['shape']
@@ -114,7 +117,8 @@ class STEP(BasePolicy):
                                     grid_resolution=v_grid_resolution,
                                     pool_method=pool_method,
                                     n_cam=1,  # number of time step of camera info
-                                    n_proprio=n_obs_steps)  # number of proprio info
+                                    n_proprio=n_obs_steps,
+                                    n_robots=num_robots)  # number of proprio info
 
         # create diffusion model
         obs_feature_dim = obs_encoder.output_shape()
@@ -141,7 +145,8 @@ class STEP(BasePolicy):
                 kernel_size=kernel_size,
                 n_groups=n_groups,
                 FiLM_type=FiLM_type,
-                grid_resolution=d_grid_resolution
+                grid_resolution=d_grid_resolution,
+                num_robots=num_robots
             )
         elif denoise_nn == 'reg':
             model = RegRepConditionalUnet1D(
@@ -249,6 +254,8 @@ class STEP(BasePolicy):
         """
         if 'robot0_eye_in_hand_image' in obs_dict:
             del obs_dict['robot0_eye_in_hand_image']
+        if 'robot1_eye_in_hand_image' in obs_dict:
+            del obs_dict['robot1_eye_in_hand_image']
         if 'agentview_image' in obs_dict:
             del obs_dict['agentview_image']
         obs_dict = copy.deepcopy(obs_dict)
@@ -258,14 +265,22 @@ class STEP(BasePolicy):
         if not self.use_pc_color:
             nobs['point_cloud'] = nobs['point_cloud'][..., :3]
         # canonicalize
-        if self.canonicalize:
-            ee_pos_in_ws = nobs['robot0_eef_pos'][:, -1:].clone()
-            nobs['point_cloud'][:, :, :, :3] -= nobs['robot0_eef_pos'][:, None, -1:]
-            nobs['robot0_eef_pos'][:, -1:] -= nobs['robot0_eef_pos'][:, -1:]
+        if self.canonicalize:  ## TODO
+            # ee_pos_in_ws = nobs['robot0_eef_pos'][:, -1:].clone()
+            # nobs['point_cloud'][:, :, :, :3] -= nobs['robot0_eef_pos'][:, None, -1:]
+            # nobs['robot0_eef_pos'][:, -1:] -= nobs['robot0_eef_pos'][:, -1:]
+            # canonicalize action and obs in pcd center
+            pcd_mean = nobs['point_cloud'][:, :, :, :3].mean(dim=2)
+            nobs['point_cloud'][:, :, :, :3] -= pcd_mean[:, :, None, :3]
+            nobs['robot0_eef_pos']-= pcd_mean
+            if self.num_robots == 2:
+                nobs['robot1_eef_pos'] -= pcd_mean
 
+            
         value = next(iter(nobs.values()))
         B, To = value.shape[:2]
-        T = self.horizon
+        H_o = self.horizon
+
         Da = self.action_dim
         Do = self.obs_feature_dim
         To = self.n_obs_steps
@@ -288,15 +303,15 @@ class STEP(BasePolicy):
                 # reshape back to B, Do
                 global_cond = nobs_features.reshape(B, -1)
             # empty data for action
-            cond_data = torch.zeros(size=(B, T, Da), device=device, dtype=dtype)
+            cond_data = torch.zeros(size=(B, H_o, Da), device=device, dtype=dtype)
             cond_mask = torch.zeros_like(cond_data, dtype=torch.bool)
         else:
             # condition through impainting
             this_nobs = dict_apply(nobs, lambda x: x[:, :To, ...].reshape(-1, *x.shape[2:]))
             nobs_features = self.obs_encoder(this_nobs)
-            # reshape back to B, T, Do
+            # reshape back to B, H_o, Do
             nobs_features = nobs_features.reshape(B, To, -1)
-            cond_data = torch.zeros(size=(B, T, Da + Do), device=device, dtype=dtype)
+            cond_data = torch.zeros(size=(B, H_o, Da + Do), device=device, dtype=dtype)
             cond_mask = torch.zeros_like(cond_data, dtype=torch.bool)
             cond_data[:, :To, Da:] = nobs_features
             cond_mask[:, :To, Da:] = True
@@ -310,10 +325,13 @@ class STEP(BasePolicy):
             **self.kwargs)
 
         naction_pred = nsample[..., :Da]
-        # uncanonicalize
-        if self.canonicalize:
-            naction_pred[..., :3] += ee_pos_in_ws
+        
+        naction_pred = naction_pred.reshape(B, H_o, self.num_robots, 10)
 
+        if self.canonicalize:
+            # naction_pred[..., :3] += ee_pos_in_ws
+            pcd_mean_over_Ho = pcd_mean.mean(dim=1)
+            naction_pred[..., :3] += pcd_mean_over_Ho[:, None, None, :3]
         # idx = 0
         # for i in range(len(trajectories)):
         #     traj_color = torch.ones_like(trajectories[i][idx, :, :3]).cpu()
@@ -371,9 +389,11 @@ class STEP(BasePolicy):
         # Converting XY- axes of the end-effector to 6D representation
         rot_mat = pytorch3d_transforms.rotation_6d_to_matrix(naction_pred[..., 3:9].reshape(-1, 6))
         rot_xy = rot_mat.transpose(2, 1)[:, :2, :]
-        rot_xy = rot_xy.reshape(B, T, 6)
+        rot_xy = rot_xy.reshape(B, H_o,  self.num_robots, 6) # T= H_o * num_eef
         naction_pred = torch.cat((naction_pred[..., :3], rot_xy, naction_pred[..., 9:]), dim=-1)
 
+        if self.num_robots == 2:
+            naction_pred = naction_pred.reshape(B, -1, 20)
         # unnormalize prediction
         action_pred = self.normalizer['action'].unnormalize(naction_pred)
 
@@ -433,18 +453,32 @@ class STEP(BasePolicy):
     def compute_loss(self, batch):
         if 'robot0_eye_in_hand_image' in batch['obs']:
             del batch['obs']['robot0_eye_in_hand_image']
+        if 'robot1_eye_in_hand_image' in batch['obs']:
+            del batch['obs']['robot1_eye_in_hand_image']
 
         # normalize input
         batch = copy.deepcopy(batch)
         nobs = self.normalizer.normalize(batch['obs'])
         nactions = self.normalizer['action'].normalize(batch['action'])
+         # reshape for canonicalize and randomize
+        nactions = nactions.reshape(nactions.shape[0], -1, self.num_robots, 10)
         bs, na = nactions.shape[0], nactions.shape[1]
 
-        # canonicalize
+        # canonicalize action and obs in pcd center
         if self.canonicalize:
-            nactions[:, :, :3] -= nobs['robot0_eef_pos'][:, -1:]
-            nobs['point_cloud'][:, :, :, :3] -= nobs['robot0_eef_pos'][:, None, -1:]
-            nobs['robot0_eef_pos'][:, -1:] -= nobs['robot0_eef_pos'][:, -1:]
+            # nactions[:, :, :3] -= nobs['robot0_eef_pos'][:, -1:]
+            # nobs['point_cloud'][:, :, :, :3] -= nobs['robot0_eef_pos'][:, None, -1:]
+            # nobs['robot0_eef_pos'][:, -1:] -= nobs['robot0_eef_pos'][:, -1:]
+
+            # canonicalize action and obs in pcd center
+            pcd_mean = nobs['point_cloud'][:, :, :, :3].mean(dim=2)
+            nobs['point_cloud'][:, :, :, :3] -= pcd_mean[:, :, None, :3]
+            nobs['robot0_eef_pos']-= pcd_mean
+            if self.num_robots == 2:
+                nobs['robot1_eef_pos'] -= pcd_mean
+
+            pcd_mean_over_Ho = pcd_mean.mean(dim=1)
+            nactions[:, :, :, :3] -= pcd_mean_over_Ho[:, None, None, :3]
 
         if self.rot_aug:
             nobs, nactions = self.rot_randomizer(nobs, nactions)
@@ -464,9 +498,16 @@ class STEP(BasePolicy):
             nobs['point_cloud'][:, :, :, :3] += trans_noise
 
         # Converting 6D representation to XY- axes of the end-effector so that it is compatible to SO(3) equ
-        rot_mat = pytorch3d_transforms.rotation_6d_to_matrix(nactions[:, :, 3:9].reshape(-1, 6))
-        rot_xy = rot_mat.transpose(2, 1)[:, :2, :].reshape(bs, na, 6)
-        nactions = torch.cat((nactions[:, :, :3], rot_xy, nactions[:, :, 9:]), dim=-1)
+        # rot_mat = pytorch3d_transforms.rotation_6d_to_matrix(nactions[:, :, 3:9].reshape(-1, 6))
+        # rot_xy = rot_mat.transpose(2, 1)[:, :2, :].reshape(bs, na, 6)
+        # nactions = torch.cat((nactions[:, :, :3], rot_xy, nactions[:, :, 9:]), dim=-1)
+        
+        rot_mat = pytorch3d_transforms.rotation_6d_to_matrix(nactions[:, :, :, 3:9].reshape(-1, 6))
+        rot_xy = rot_mat.transpose(2, 1)[:, :2, :].reshape(bs, na, self.num_robots, 6)
+        nactions = torch.cat((nactions[:, :, :, :3], rot_xy, nactions[:, :, :, 9:]), dim=-1)
+
+        ## reshape for mask generation
+        nactions = nactions.reshape(bs, na, -1)
 
         # # strangely, action are not aligned with ee_pose, fixing it manually
         # d = 2 * nactions[:, 0:1, :3] - nactions[:, 1:2, :3] - nobs["robot0_eef_pos"][:, 1:2]

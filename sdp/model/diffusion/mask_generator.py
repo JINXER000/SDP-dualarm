@@ -1,4 +1,5 @@
 from typing import Sequence, Optional
+from h5py._hl.dataset import sel
 import torch
 from torch import nn
 from sdp.model.common.module_attr_mixin import ModuleAttrMixin
@@ -51,6 +52,9 @@ class LowdimMaskGenerator(ModuleAttrMixin):
         ):
         super().__init__()
         self.action_dim = action_dim
+        # # for dual-arm
+        # if self.action_dim > 10:
+        #     self.action_dim = self.action_dim // 2
         self.obs_dim = obs_dim
         self.max_n_obs_steps = max_n_obs_steps
         self.fix_obs_steps = fix_obs_steps

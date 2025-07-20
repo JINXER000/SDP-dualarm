@@ -23,6 +23,7 @@ import robomimic.utils.file_utils as FileUtils
 import robomimic.utils.env_utils as EnvUtils
 import robomimic.utils.obs_utils as ObsUtils
 
+import robosuite
 
 def create_env(env_meta, shape_meta, enable_render=True):
     modality_mapping = collections.defaultdict(list)
@@ -81,9 +82,20 @@ class RobomimicImageRunner(BaseImageRunner):
         # disable object state observation
         env_meta['env_kwargs']['use_object_obs'] = False
 
+        env_meta['env_kwargs']['has_offscreen_renderer'] = False
+        if len(env_meta['env_kwargs']['robots']) == 2:
+            env_meta['env_kwargs']['camera_names'].append('robot1_eye_in_hand')
+ 
+
         rotation_transformer = None
         if abs_action:
-            env_meta['env_kwargs']['controller_configs']['control_delta'] = False
+            if robosuite.__version__ < '1.5.0':
+                env_meta['env_kwargs']['controller_configs']['control_delta'] = False
+            else:
+              ## TODO: check if this is correct
+                env_meta['env_kwargs']['controller_configs']['body_parts']['right']['input_type'] = 'absolute'
+                env_meta['env_kwargs']['controller_configs']['body_parts']['right']["input_ref_frame"] = "world"  # use world frame as reference
+
             rotation_transformer = RotationTransformer('axis_angle', 'rotation_6d')
 
         def env_fn():
@@ -216,7 +228,7 @@ class RobomimicImageRunner(BaseImageRunner):
             env_init_fn_dills.append(dill.dumps(init_fn))
 
         env = AsyncVectorEnv(env_fns, dummy_env_fn=dummy_env_fn)
-
+        # env = SyncVectorEnv(env_fns)
         self.env_meta = env_meta
         self.env = env
         self.env_fns = env_fns

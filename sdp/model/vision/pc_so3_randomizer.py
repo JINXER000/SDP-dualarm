@@ -42,15 +42,27 @@ class PointCloudSO3RotRandomizer(nn.Module):
         Returns:
             torch.Tensor: rotated or unrotated tensors based on the mode
         """
+        
         if self.training:
             pc = nobs["point_cloud"]
-            pos = nobs["robot0_eef_pos"]
-            # x, y, z, w -> w, x, y, z
-            quat = nobs["robot0_eef_quat"][:, :, [3, 0, 1, 2]]
+
             batch_size = pc.shape[0]
             T = pc.shape[1]
             C = pc.shape[2]
-            Ta = naction.shape[1]
+            Hp = naction.shape[1]  
+
+            rbt0_pos = nobs["robot0_eef_pos"].unsqueeze(-2)
+            # x, y, z, w -> w, x, y, z
+            rbt0_quat = nobs["robot0_eef_quat"][:, :, [3, 0, 1, 2]].unsqueeze(-2)
+            n_robots = naction.shape[2]
+            if n_robots == 2:
+                rbt1_pos = nobs["robot1_eef_pos"].unsqueeze(-2)
+                rbt1_quat = nobs["robot1_eef_quat"][:, :, [3, 0, 1, 2]].unsqueeze(-2)
+                pos = torch.cat((rbt0_pos, rbt1_pos), dim=-2).reshape(batch_size, -1, 3)
+                quat = torch.cat((rbt0_quat, rbt1_quat), dim=-2).reshape(batch_size, -1, 4)
+
+            reshaped_naction = naction.reshape(batch_size, Hp*n_robots, 10)
+            Ta = reshaped_naction.shape[1]
             max_tries = 99
 
             for i in range(max_tries):
@@ -59,13 +71,15 @@ class PointCloudSO3RotRandomizer(nn.Module):
                 angles *= self.aug_angles
                 rotation_matrix = self.euler2mat.forward(angles)
 
-                rotated_apos = naction[:, :, 0:3].clone()
+                rotated_apos = reshaped_naction[:, :, 0:3].clone()
                 rotated_apos = (rotation_matrix @ rotated_apos.permute(0, 2, 1)).permute(0, 2, 1)
-                rotated_arot_mat = self.mat26D.inverse(naction[:, :, 3:9].reshape(-1, 6).clone())
+                rotated_apos = rotated_apos.reshape(batch_size, Ta, -1)
+                rotated_arot_mat = self.mat26D.inverse(reshaped_naction[:, :, 3:9].reshape(-1, 6).clone())
                 rotated_arot_mat = torch.bmm(rotation_matrix.repeat_interleave(Ta, 0), rotated_arot_mat)
-                rotated_naction = naction.clone()
+                rotated_naction = reshaped_naction.clone()
                 rotated_naction[:, :, 0:3] = rotated_apos
                 rotated_naction[:, :, 3:9] = self.mat26D.forward(rotated_arot_mat).reshape(batch_size, Ta, 6)
+                rotated_naction = rotated_naction.reshape(batch_size, Hp, n_robots, 10)
 
                 # rotated_naction[:, :, [3, 6]] = (rotation_matrix[:, :2, :2] @ naction[:, :, [3, 6]].permute(0, 2, 1)).permute(0, 2, 1)
                 # rotated_naction[:, :, [4, 7]] = (rotation_matrix[:, :2, :2] @ naction[:, :, [4, 7]].permute(0, 2, 1)).permute(0, 2, 1)
@@ -75,6 +89,9 @@ class PointCloudSO3RotRandomizer(nn.Module):
                 rot = self.quat2mat.forward(quat)
                 rotated_rot = rotation_matrix.unsqueeze(1) @ rot
                 rotated_quat = self.quat2mat.inverse(rotated_rot)
+                ## reshape back
+                rotated_pos = rotated_pos.reshape(batch_size, -1, n_robots, 3)
+                rotated_quat = rotated_quat.reshape(batch_size, -1, n_robots, 4)
 
                 if rotated_pos.min() >= -1 and rotated_pos.max() <= 1 and rotated_naction[:, :, :2].min() >= -1 and rotated_naction[:, :, :2].max() <= 1:
                     break
@@ -93,9 +110,12 @@ class PointCloudSO3RotRandomizer(nn.Module):
             rotated_pc = rearrange(rotated_pc, "b (t n) d -> b t n d", t=T)
 
             nobs["point_cloud"] = rotated_pc
-            nobs["robot0_eef_pos"] = rotated_pos
+            nobs["robot0_eef_pos"] = rotated_pos[:, :, 0, :]
             # w, x, y, z -> x, y, z, w
-            nobs["robot0_eef_quat"] = rotated_quat[:, :, [1, 2, 3, 0]]
+            nobs["robot0_eef_quat"] = rotated_quat[:, :, 0, [1, 2, 3, 0]]
+            if n_robots == 2:
+                nobs["robot1_eef_pos"] = rotated_pos[:, :, 1, :]
+                nobs["robot1_eef_quat"] = rotated_quat[:, :, 1, [1, 2, 3, 0]]
             naction = rotated_naction
 
         return nobs, naction

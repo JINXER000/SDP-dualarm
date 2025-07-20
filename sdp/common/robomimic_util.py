@@ -9,7 +9,7 @@ import robomimic.utils.tensor_utils as TensorUtils
 from scipy.spatial.transform import Rotation
 
 from robomimic.config import config_factory
-
+import robosuite
 
 class RobomimicAbsoluteActionConverter:
     def __init__(self, dataset_path, algo_name='bc'):
@@ -22,7 +22,14 @@ class RobomimicAbsoluteActionConverter:
 
         env_meta = FileUtils.get_env_metadata_from_dataset(dataset_path)
         abs_env_meta = copy.deepcopy(env_meta)
-        abs_env_meta['env_kwargs']['controller_configs']['control_delta'] = False
+        
+        if robosuite.__version__ < '1.5.0':
+            abs_env_meta['env_kwargs']['controller_configs']['control_delta'] = False
+        else:
+            ## TODO: check if this is correct
+            abs_env_meta['env_kwargs']['controller_configs']['body_parts']['right']['input_type'] = 'absolute'
+            abs_env_meta['env_kwargs']['controller_configs']['body_parts']['right']["input_ref_frame"] = "world"  # use world frame as reference
+
 
         env = EnvUtils.create_env_from_metadata(
             env_meta=env_meta,
@@ -38,7 +45,8 @@ class RobomimicAbsoluteActionConverter:
             render_offscreen=False,
             use_image_obs=False, 
         )
-        assert not abs_env.env.robots[0].controller.use_delta
+        if robosuite.__version__ < '1.5.0':
+            assert not abs_env.env.robots[0].controller.use_delta
 
         self.env = env
         self.abs_env = abs_env
@@ -78,10 +86,16 @@ class RobomimicAbsoluteActionConverter:
                 robot.control(stacked_actions[i,idx], policy_step=True)
             
                 # read pos and ori from robots
-                controller = robot.controller
-                action_goal_pos[i,idx] = controller.goal_pos
-                action_goal_ori[i,idx] = Rotation.from_matrix(
+                if robosuite.__version__ < '1.5.0':
+                    controller = robot.controller
+                    action_goal_pos[i,idx]  = controller.goal_pos ## NOTE: if version < 1.5, this is absolute in the world frame. Otherwise, the value is up to the conf, can be world frame or base frame. 
+                    action_goal_ori[i,idx] = Rotation.from_matrix(
                     controller.goal_ori).as_rotvec()
+                else:
+                    controller = robot.composite_controller.part_controllers['right']
+                    action_goal_pos[i,idx]  = controller.ref_pos
+                    action_goal_ori[i,idx] = Rotation.from_matrix(
+                    controller.ref_ori_mat).as_rotvec()
 
         stacked_abs_actions = np.concatenate([
             action_goal_pos,

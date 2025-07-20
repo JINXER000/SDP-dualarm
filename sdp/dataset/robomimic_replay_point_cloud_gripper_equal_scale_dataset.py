@@ -23,6 +23,7 @@ from sdp.common.replay_buffer import ReplayBuffer
 from sdp.common.sampler import SequenceSampler, get_val_mask
 from sdp.common.normalize_util import (
     robomimic_abs_action_only_normalizer_from_stat,
+    robomimic_abs_action_only_dual_arm_normalizer_from_stat,
     get_range_normalizer_from_stat,
     get_point_cloud_identity_normalizer,
     get_voxel_identity_normalizer,
@@ -182,7 +183,17 @@ class RobomimicReplayPointCloudGripperEqualScaleDataset(BaseImageDataset):
         if self.abs_action:
             if stat['mean'].shape[-1] > 10:
                 # dual arm
-                raise NotImplementedError
+                # raise NotImplementedError
+                n_arm = 2
+                arm_dim = stat['mean'].shape[-1] // n_arm
+                for arm in range(n_arm):
+                    start = arm * arm_dim
+                    end = (arm + 1) * arm_dim
+                    # Align position stats for each arm (first 3 dims)
+                    stat['min'][start:start+3] = pcd_stat['min'][:3]
+                    stat['max'][start:start+3] = pcd_stat['max'][:3]
+                    stat['mean'][start:start+3] = pcd_stat['mean'][:3]
+                this_normalizer = robomimic_abs_action_only_dual_arm_normalizer_from_stat(stat)
             else:
                 # magnitute = np.max([stat['max'][:2], -stat['min'][:2]])
                 # magnitute = np.linalg.norm(self.replay_buffer['action'][:, :2], axis=1).max()
@@ -251,14 +262,14 @@ class RobomimicReplayPointCloudGripperEqualScaleDataset(BaseImageDataset):
         T_slice = slice(self.n_obs_steps)
 
         obs_dict = dict()
-        for key in self.rgb_keys:
-            # move channel last to channel first
-            # T,H,W,C
-            # convert uint8 image to float32
-            obs_dict[key] = np.moveaxis(data[key][T_slice], -1, 1
-                                        ).astype(np.float32) / 255.
-            # T,C,H,W
-            del data[key]
+        # for key in self.rgb_keys:
+        #     # move channel last to channel first
+        #     # T,H,W,C
+        #     # convert uint8 image to float32
+        #     obs_dict[key] = np.moveaxis(data[key][T_slice], -1, 1
+        #                                 ).astype(np.float32) / 255.
+        #     # T,C,H,W
+        #     del data[key]
         for key in self.pc_keys:
             obs_dict[key] = data[key][T_slice].astype(np.float32)
             del data[key]
@@ -385,44 +396,44 @@ def _convert_point_cloud_to_replay(store, shape_meta, dataset_path, abs_action, 
             except Exception as e:
                 return False
 
-        with tqdm(total=n_steps * len(rgb_keys), desc="Loading image data", mininterval=1.0) as pbar:
-            # one chunk per thread, therefore no synchronization needed
-            with concurrent.futures.ThreadPoolExecutor(max_workers=n_workers) as executor:
-                futures = set()
-                for key in rgb_keys:
-                    data_key = 'obs/' + key
-                    shape = tuple(shape_meta['obs'][key]['shape'])
-                    c, h, w = shape
-                    this_compressor = Jpeg2k(level=50)
-                    img_arr = data_group.require_dataset(
-                        name=key,
-                        shape=(n_steps, h, w, c),
-                        chunks=(1, h, w, c),
-                        compressor=this_compressor,
-                        dtype=np.uint8
-                    )
-                    for episode_idx in range(n_demo):
-                        demo = demos[f'demo_{episode_idx}']
-                        hdf5_arr = demo['obs'][key]
-                        for hdf5_idx in range(hdf5_arr.shape[0]):
-                            if len(futures) >= max_inflight_tasks:
-                                # limit number of inflight tasks
-                                completed, futures = concurrent.futures.wait(futures,
-                                                                             return_when=concurrent.futures.FIRST_COMPLETED)
-                                for f in completed:
-                                    if not f.result():
-                                        raise RuntimeError('Failed to encode image!')
-                                pbar.update(len(completed))
+        # with tqdm(total=n_steps * len(rgb_keys), desc="Loading image data", mininterval=1.0) as pbar:
+        #     # one chunk per thread, therefore no synchronization needed
+        #     with concurrent.futures.ThreadPoolExecutor(max_workers=n_workers) as executor:
+        #         futures = set()
+        #         for key in rgb_keys:
+        #             data_key = 'obs/' + key
+        #             shape = tuple(shape_meta['obs'][key]['shape'])
+        #             c, h, w = shape
+        #             this_compressor = Jpeg2k(level=50)
+        #             img_arr = data_group.require_dataset(
+        #                 name=key,
+        #                 shape=(n_steps, h, w, c),
+        #                 chunks=(1, h, w, c),
+        #                 compressor=this_compressor,
+        #                 dtype=np.uint8
+        #             )
+        #             for episode_idx in range(n_demo):
+        #                 demo = demos[f'demo_{episode_idx}']
+        #                 hdf5_arr = demo['obs'][key]
+        #                 for hdf5_idx in range(hdf5_arr.shape[0]):
+        #                     if len(futures) >= max_inflight_tasks:
+        #                         # limit number of inflight tasks
+        #                         completed, futures = concurrent.futures.wait(futures,
+        #                                                                      return_when=concurrent.futures.FIRST_COMPLETED)
+        #                         for f in completed:
+        #                             if not f.result():
+        #                                 raise RuntimeError('Failed to encode image!')
+        #                         pbar.update(len(completed))
 
-                            zarr_idx = episode_starts[episode_idx] + hdf5_idx
-                            futures.add(
-                                executor.submit(img_copy,
-                                                img_arr, zarr_idx, hdf5_arr, hdf5_idx))
-                completed, futures = concurrent.futures.wait(futures)
-                for f in completed:
-                    if not f.result():
-                        raise RuntimeError('Failed to encode image!')
-                pbar.update(len(completed))
+        #                     zarr_idx = episode_starts[episode_idx] + hdf5_idx
+        #                     futures.add(
+        #                         executor.submit(img_copy,
+        #                                         img_arr, zarr_idx, hdf5_arr, hdf5_idx))
+        #         completed, futures = concurrent.futures.wait(futures)
+        #         for f in completed:
+        #             if not f.result():
+        #                 raise RuntimeError('Failed to encode image!')
+        #         pbar.update(len(completed))
 
         with tqdm(total=n_steps * len(pc_keys), desc="Loading point cloud data", mininterval=1.0) as pbar:
             # one chunk per thread, therefore no synchronization needed

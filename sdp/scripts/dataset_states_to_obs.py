@@ -83,6 +83,8 @@ def extract_trajectory(
         camera_names=['birdview', 'agentview', 'robot0_eye_in_hand']
     else:
         camera_names=['birdview', 'agentview', 'sideview', 'robot0_eye_in_hand']
+    if args.num_robots == 2:
+        camera_names.append('robot1_eye_in_hand')
     env = EnvUtils.create_env_for_data_processing(
         env_meta=env_meta,
         # camera_names=['frontview', 'birdview', 'agentview', 'sideview', 'agentview_full', 'robot0_robotview', 'robot0_eye_in_hand'], 
@@ -311,6 +313,12 @@ if __name__ == "__main__":
         "--num_workers",
         type=int,
         default=2,
+    )
+
+    parser.add_argument(
+        "--num_robots",
+        type=int,
+        default=1,
     )
 
     # flag for reward shaping

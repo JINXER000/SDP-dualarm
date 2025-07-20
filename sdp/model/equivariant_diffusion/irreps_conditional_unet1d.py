@@ -123,9 +123,11 @@ class IrrepConditionalUnet1D(nn.Module):
                  FiLM_type='SFiLM',
                  cond_predict_scale=True,
                  max_lmax=2,
-                 grid_resolution=14
+                 grid_resolution=14,
+                 num_robots=1
                  ):
         super().__init__()
+        self.num_robots = num_robots
         all_dims = [input_dim] + list(down_dims)
         start_dim = down_dims[0]
         self.input_dim = input_dim
@@ -234,10 +236,17 @@ class IrrepConditionalUnet1D(nn.Module):
         global_cond: (B, (C, irrep))
         output: (B, T, (C, irrep))
         """
-        bs, n_hist, c = sample.shape
+        # bs, n_hist, c = sample.shape
+        bs = sample.shape[0]
+        n_hist = sample.shape[1]
+        ## reshape to get s2_input
+        sample = sample.reshape(bs, n_hist, self.num_robots, -1)
         s2_input = torch.zeros(bs, n_hist, self.input_dim, self.d_irrep).to(sample.device)
-        s2_input[..., 1:4] = sample[:, :, :9].reshape(bs, n_hist, 3, 3)  # 3D position + 6D rotation
-        s2_input[..., 0, 0] = sample[:, :, -1]
+        s2_input[...,:3, 1:4] = sample[:, :, 0, :9].reshape(bs, n_hist, 3, 3)  # 3D position + 6D rotation
+        s2_input[..., 0, 0] = sample[:, :, 0, -1]
+        if self.num_robots > 1:
+            s2_input[..., 3:, 1:4] = sample[:, :, 1, :9].reshape(bs, n_hist, 3, 3)  # 3D position + 6D rotation
+            s2_input[..., 3, 0] = sample[:, :, 1, -1]
         s2_input = einops.rearrange(s2_input, 'b h c i -> b (c i) h')
 
         # 1. time
@@ -285,10 +294,19 @@ class IrrepConditionalUnet1D(nn.Module):
 
         x = einops.rearrange(x, 'b (n i) h -> b h n i', i=self.d_irrep)
         gripper_out = x[..., :1, 0]  # b h 1
-        pos_rot_out = x[..., 1:4]  # b h 3 3
+        pos_rot_out = x[..., :3,  1:4]  # b h 3 3
         pos_rot_out = einops.rearrange(pos_rot_out, 'b h n i -> b h (n i)')  # b h 9
 
         out = torch.cat([pos_rot_out, gripper_out], dim=-1)
+
+        if self.num_robots > 1:
+            gripper_out_2 = x[..., 3:4, 0]  # b h 1
+            pos_rot_out_2 = x[..., 3:, 1:4]  # b h 3 3
+            pos_rot_out_2 = einops.rearrange(pos_rot_out_2, 'b h n i -> b h (n i)')  # b h 9
+            
+            out_2 = torch.cat([pos_rot_out_2, gripper_out_2], dim=-1)
+            out = torch.cat([out, out_2], dim=-1)
+       
         return out
 
     @property
