@@ -27,7 +27,7 @@ policy:
   use_mid_condition: true
   use_up_condition: true
   canonicalize: true
-  #canonicalize: false
+  # canonicalize: false
   rot_aug: [5, 5, 180]
   rad_aug: 0
   pcd_noise: 0
@@ -138,7 +138,7 @@ logging:
   group: null
 
 checkpoint:
-  save_ckpt: False # if True, save checkpoint every checkpoint_every
+  save_ckpt: True # if True, save checkpoint every checkpoint_every
   topk:
     monitor_key: test_mean_score
     mode: max
