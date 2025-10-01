@@ -26,8 +26,8 @@ policy:
   use_down_condition: true
   use_mid_condition: true
   use_up_condition: true
-  canonicalize: true
-  # canonicalize: false
+  # canonicalize: true
+  canonicalize: false
   rot_aug: [5, 5, 180]
   rad_aug: 0
   pcd_noise: 0

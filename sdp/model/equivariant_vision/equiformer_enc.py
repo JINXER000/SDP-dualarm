@@ -301,7 +301,20 @@ class EquiFormerEnc(nn.Module):
         ########### Downstream Block #############
         for n, block in enumerate(self.down_blocks):
             #### Downsampling ####
-            pool_graph = block['pool'](node_coord_src=node_coord, batch_src=batch)
+            # For the last pooling stage (AdaptiveOriginPool), optionally pass gripper origins (bi-manual)
+            if n == len(self.down_blocks) - 1:
+                # Build origins tensor of shape (batch_size, K, 3)
+                # Use the latest proprio timestep as origin per gripper
+                origins_list = [ee_pose_0[:, :, -1].transpose(1, 0).transpose(1, 0)]  # (b, 3)
+                if ee_pose_1 is not None:
+                    origins_list.append(ee_pose_1[:, :, -1].transpose(1, 0).transpose(1, 0))
+                origion = None
+                if len(origins_list) > 0:
+                    # stack along K dimension if multiple grippers
+                    origion = torch.stack(origins_list, dim=1)  # (b, K, 3)
+                pool_graph = block['pool'](node_coord_src=node_coord, batch_src=batch, origion=origion)
+            else:
+                pool_graph = block['pool'](node_coord_src=node_coord, batch_src=batch)
             node_coord_dst, edge_src, edge_dst, degree, batch_dst, node_idx = pool_graph
 
             edge_vec = node_coord.index_select(0, edge_src) - node_coord_dst.index_select(0, edge_dst)
