@@ -305,9 +305,9 @@ class EquiFormerEnc(nn.Module):
             if n == len(self.down_blocks) - 1:
                 # Build origins tensor of shape (batch_size, K, 3)
                 # Use the latest proprio timestep as origin per gripper
-                origins_list = [ee_pose_0[:, :, -1].transpose(1, 0).transpose(1, 0)]  # (b, 3)
+                origins_list = [ee_pose_0[:, :, -1]]  # (b, 3)
                 if ee_pose_1 is not None:
-                    origins_list.append(ee_pose_1[:, :, -1].transpose(1, 0).transpose(1, 0))
+                    origins_list.append(ee_pose_1[:, :, -1])
                 origion = None
                 if len(origins_list) > 0:
                     # stack along K dimension if multiple grippers
