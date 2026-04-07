@@ -16,3 +16,4 @@
 */outputs
 .vscode
 *.ply
+.specstory

@@ -359,7 +359,7 @@ class EquiFormerEnc(nn.Module):
             # Edge encoding (distance and atom edge)
             edge_attr = block['distance_expansion'](edge_length)
             node_dst = SO3_Embedding(
-                batch_size,
+                node_coord_dst.shape[0],
                 self.lmax_list,
                 self.sphere_channels[n],
                 self.device,
@@ -383,7 +383,13 @@ class EquiFormerEnc(nn.Module):
         if self.norm is not None:
             node_dst.embedding = self.norm(node_dst.embedding)
 
-        s2_feat = node_dst.embedding
+        # If the last pooling produced multiple destinations per batch (e.g., K gripper origins),
+        # aggregate per batch to keep one node per batch for downstream shaping.
+        if node_dst.embedding.shape[0] != batch_size:
+            # batch now indicates which samples belong to the same original batch element
+            s2_feat = torch.stack([node_dst.embedding[batch == b].mean(dim=0) for b in range(batch_size)], dim=0)
+        else:
+            s2_feat = node_dst.embedding
         
         # Calculate total proprioceptive features needed
         total_proprio_features = 4 * self.n_proprio * self.n_robots

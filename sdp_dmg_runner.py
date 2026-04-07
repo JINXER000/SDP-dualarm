@@ -119,13 +119,13 @@ class SDP_DMG_Evaluator(DMG_env_switchable):
 
         return uaction
 
-    def initialize_env(self, env_name,  **kwargs):
-        self.cur_env_name = env_name
+    def initialize_env(self, skill, env_options):
+        self.cur_env_name = skill
             
-        self.load_checkpoint(**kwargs)        
+        self.load_checkpoint(env_options)        
         self.ts = self.reset_all()
 
-    def load_checkpoint(self, width = 84, height = 84, controller_name = "OSC_POSE", **kwargs):
+    def load_checkpoint(self, env_options):
         # load checkpoint
         payload = torch.load(open(self.checkpoint_dict[self.cur_env_name], 'rb'), pickle_module=dill)
         cfg = payload['cfg']
@@ -192,7 +192,7 @@ class SDP_DMG_Evaluator(DMG_env_switchable):
             raise NotImplementedError("policy switching is not supported yet")
         
         np.random.seed(int(time.time()))
-        super().__init__(env_name, controller_name=controller_name, abs_action=self.lfd_abs_action, H=height, W=width, cam_names=["sideview","agentview", "birdview", "frontview", "robot0_eye_in_hand", "robot1_eye_in_hand"], **kwargs)
+        super().__init__(env_name, env_options)
         self.env_initialized = True
 
         
@@ -353,8 +353,24 @@ def wrapper_test():
 
     env_runer = SDP_DMG_Evaluator(checkpoint_dict, output, max_timesteps, num_inference_steps, record= True)
     
+
     for skill in env_names:
-        env_runer.initialize_env(skill, width = 168, height = 168)
+
+        ## hardcode ennv_options
+        env_options = {}
+        # env_options["env_name"] = skill
+        # env_options["env_configuration"] = env_configuration
+        env_options["robots"] = ['Panda', 'Panda']
+        env_options["camera_names"] =["sideview","agentview", "birdview", "frontview", "robot0_eye_in_hand", "robot1_eye_in_hand"]
+        env_options["camera_heights"] = 168
+        env_options["camera_widths"] =  168
+        # env_options["has_offscreen_renderer"] = True
+        # env_options["use_camera_obs"] = True
+        # env_options["camera_depths"] = True
+        env_options["camera_segmentations"] = "instance"
+        env_options['output_all_pcds'] = True
+        
+        env_runer.initialize_env(skill, env_options)
         for i in range(max_timesteps):
             done = env_runer.inference_once()
             task_success = env_runer.handle_rewards()
