@@ -41,6 +41,7 @@ max_steps = {
     'lift': 400,
     'square': 400,
     'two_arm_three_piece_assembly': 500,
+    'two_arm_threading': 500,
 }
 
 def get_ws_x_center(task_name):

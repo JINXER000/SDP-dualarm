@@ -8,6 +8,7 @@ if __name__ == "__main__":
 
 import multiprocessing
 import os
+os.environ.setdefault("MUJOCO_GL", "osmesa") ## H20 can only render using CPU
 import shutil
 import click
 import pathlib

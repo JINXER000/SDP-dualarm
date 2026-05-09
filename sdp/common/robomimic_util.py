@@ -20,7 +20,8 @@ class RobomimicAbsoluteActionConverter:
         # must ran before create dataset
         ObsUtils.initialize_obs_utils_with_config(config)
 
-        env_meta = FileUtils.get_env_metadata_from_dataset(dataset_path)
+        env_meta = copy.deepcopy(FileUtils.get_env_metadata_from_dataset(dataset_path))
+        env_meta['env_kwargs'].pop('camera_segmentations', None)
         abs_env_meta = copy.deepcopy(env_meta)
         
         if robosuite.__version__ < '1.5.0':

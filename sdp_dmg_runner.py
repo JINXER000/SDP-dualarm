@@ -125,6 +125,8 @@ class SDP_DMG_Evaluator(DMG_env_switchable):
 
     def initialize_env(self, skill, env_options):
         self.cur_env_name = skill
+        env_options = copy.deepcopy(env_options)
+        env_options.pop("camera_segmentations", None)
             
         self.load_checkpoint(env_options)        
         self.ts = self.reset_all()
@@ -371,7 +373,6 @@ def wrapper_test():
         # env_options["has_offscreen_renderer"] = True
         # env_options["use_camera_obs"] = True
         # env_options["camera_depths"] = True
-        env_options["camera_segmentations"] = "instance"
         env_options['output_all_pcds'] = True
         
         env_runer.initialize_env(skill, env_options)

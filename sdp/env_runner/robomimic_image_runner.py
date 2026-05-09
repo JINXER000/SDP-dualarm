@@ -1,4 +1,5 @@
 import os
+import copy
 import wandb
 import numpy as np
 import torch
@@ -77,15 +78,37 @@ class RobomimicImageRunner(BaseImageRunner):
         steps_per_render = max(robosuite_fps // fps, 1)
 
         # read from dataset
-        env_meta = FileUtils.get_env_metadata_from_dataset(
-            dataset_path)
+        env_meta = copy.deepcopy(FileUtils.get_env_metadata_from_dataset(
+            dataset_path))
+        # Drop instance segmentation so EnvRobosuite does not emit per-object *_{point_cloud} keys.
+        env_meta['env_kwargs'].pop('camera_segmentations', None)
+        # Aggregated workspace point cloud (+ voxels) for shape_meta key `point_cloud`.
+        env_meta['env_kwargs']['output_all_pcds'] = True
         # disable object state observation
         env_meta['env_kwargs']['use_object_obs'] = False
 
         env_meta['env_kwargs']['has_offscreen_renderer'] = False
         if len(env_meta['env_kwargs']['robots']) == 2:
             env_meta['env_kwargs']['camera_names'].append('robot1_eye_in_hand')
- 
+
+        # HDF5 env metadata often uses collection resolution (e.g. 128); shape_meta matches training (e.g. 84).
+        # AsyncVectorEnv shared-memory buffers use wrapper observation_space sizes — mismatch raises broadcast errors.
+        rgb_shapes = [
+            tuple(meta['shape'])
+            for meta in shape_meta['obs'].values()
+            if meta.get('type') == 'rgb' and len(meta.get('shape', ())) == 3
+        ]
+        if rgb_shapes:
+            ref = rgb_shapes[0]
+            if not all(s == ref for s in rgb_shapes):
+                raise ValueError(
+                    'RobomimicImageRunner: mixed RGB shapes in shape_meta are unsupported for rollout: '
+                    f'{rgb_shapes}'
+                )
+            _, img_h, img_w = ref
+            n_cams = len(env_meta['env_kwargs']['camera_names'])
+            env_meta['env_kwargs']['camera_heights'] = [img_h] * n_cams
+            env_meta['env_kwargs']['camera_widths'] = [img_w] * n_cams
 
         rotation_transformer = None
         if abs_action:
