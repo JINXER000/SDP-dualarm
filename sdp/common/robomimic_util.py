@@ -26,9 +26,9 @@ class RobomimicAbsoluteActionConverter:
         if robosuite.__version__ < '1.5.0':
             abs_env_meta['env_kwargs']['controller_configs']['control_delta'] = False
         else:
-            ## TODO: check if this is correct
-            abs_env_meta['env_kwargs']['controller_configs']['body_parts']['right']['input_type'] = 'absolute'
-            abs_env_meta['env_kwargs']['controller_configs']['body_parts']['right']["input_ref_frame"] = "world"  # use world frame as reference
+            for part in abs_env_meta['env_kwargs']['controller_configs']['body_parts'].values():
+                part['input_type'] = 'absolute'
+                part['input_ref_frame'] = 'world'
 
 
         env = EnvUtils.create_env_from_metadata(

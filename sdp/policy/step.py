@@ -264,24 +264,6 @@ class STEP(BasePolicy):
         # this_n_point_cloud = nobs['imagin_robot'][..., :3] # only use coordinate
         if not self.use_pc_color:
             nobs['point_cloud'] = nobs['point_cloud'][..., :3]
-        # canonicalize
-        if self.canonicalize: 
-            # e_T0 = nobs['robot0_eef_pos'][:, -1:].clone()
-            # nobs['point_cloud'][:, :, :, :3] -= nobs['robot0_eef_pos'][:, None, -1:]
-            # nobs['robot0_eef_pos'][:, -1:] -= nobs['robot0_eef_pos'][:, -1:]
-
-            # e_T1 = nobs['robot1_eef_pos'][:, -1:].clone()
-            # nobs['point_cloud'][:, :, :, :3] -= nobs['robot1_eef_pos'][:, None, -1:]
-            # nobs['robot1_eef_pos'][:, -1:] -= nobs['robot1_eef_pos'][:, -1:]
-
-            # canonicalize action and obs in pcd center
-            pcd_mean = nobs['point_cloud'][:, :, :, :3].mean(dim=2)
-            nobs['point_cloud'][:, :, :, :3] -= pcd_mean[:, :, None, :3]
-            nobs['robot0_eef_pos']-= pcd_mean
-            if self.num_robots == 2:
-                nobs['robot1_eef_pos'] -= pcd_mean
-
-            
         value = next(iter(nobs.values()))
         B, To = value.shape[:2]
         H_o = self.horizon
@@ -333,12 +315,6 @@ class STEP(BasePolicy):
         
         naction_pred = naction_pred.reshape(B, H_o, self.num_robots, 10)
 
-        if self.canonicalize:
-            # naction_pred[..., 0, :3] += e_T0
-            # naction_pred[..., 1, :3] += e_T1
-
-            pcd_mean_over_Ho = pcd_mean.mean(dim=1)
-            naction_pred[..., :3] += pcd_mean_over_Ho[:, None, None, :3]
         # idx = 0
         # for i in range(len(trajectories)):
         #     traj_color = torch.ones_like(trajectories[i][idx, :, :3]).cpu()
@@ -470,29 +446,6 @@ class STEP(BasePolicy):
          # reshape for canonicalize and randomize
         nactions = nactions.reshape(nactions.shape[0], -1, self.num_robots, 10)
         bs, na = nactions.shape[0], nactions.shape[1]
-
-        # canonicalize action and obs in pcd center
-        if self.canonicalize:
-            # # A_T0 - e_T0 
-            # nactions[:, :, 0, :3] -= nobs['robot0_eef_pos'][:, -1:]
-            # # A_T1 - e_T1 
-            # nactions[:, :, 1, :3] -= nobs['robot1_eef_pos'][:, -1:]
-            # # O - e_T0 - e_T1
-            # nobs['point_cloud'][:, :, :, :3] -= (nobs['robot0_eef_pos'][:, None, -1:] + nobs['robot1_eef_pos'][:, None, -1:])
-            # # e_T0 - e_T0
-            # nobs['robot0_eef_pos'][:, -1:] -= nobs['robot0_eef_pos'][:, -1:]
-            # # e_T1 - e_T1
-            # nobs['robot1_eef_pos'][:, -1:] -= nobs['robot1_eef_pos'][:, -1:]
-
-            # canonicalize action and obs in pcd center
-            pcd_mean = nobs['point_cloud'][:, :, :, :3].mean(dim=2)
-            nobs['point_cloud'][:, :, :, :3] -= pcd_mean[:, :, None, :3]
-            nobs['robot0_eef_pos']-= pcd_mean
-            if self.num_robots == 2:
-                nobs['robot1_eef_pos'] -= pcd_mean
-
-            pcd_mean_over_Ho = pcd_mean.mean(dim=1)
-            nactions[:, :, :, :3] -= pcd_mean_over_Ho[:, None, None, :3]
 
         if self.rot_aug:
             nobs, nactions = self.rot_randomizer(nobs, nactions)

@@ -92,9 +92,9 @@ class RobomimicImageRunner(BaseImageRunner):
             if robosuite.__version__ < '1.5.0':
                 env_meta['env_kwargs']['controller_configs']['control_delta'] = False
             else:
-              ## TODO: check if this is correct
-                env_meta['env_kwargs']['controller_configs']['body_parts']['right']['input_type'] = 'absolute'
-                env_meta['env_kwargs']['controller_configs']['body_parts']['right']["input_ref_frame"] = "world"  # use world frame as reference
+                for part in env_meta['env_kwargs']['controller_configs']['body_parts'].values():
+                    part['input_type'] = 'absolute'
+                    part['input_ref_frame'] = 'world'
 
             rotation_transformer = RotationTransformer('axis_angle', 'rotation_6d')
 

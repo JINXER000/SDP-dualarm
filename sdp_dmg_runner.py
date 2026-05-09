@@ -18,6 +18,10 @@ from sdp.policy.base_image_policy import BaseImagePolicy
 from sdp.gym_util.video_recording_wrapper import VideoRecorder
 from sdp.model.common.rotation_transformer import RotationTransformer
 
+import sys as _sys
+_DMG_REPO = "/home/user/yzchen_ws/imitation_learning/dexmimicgen"
+if _DMG_REPO not in _sys.path:
+    _sys.path.insert(0, _DMG_REPO)
 from scripts.robomimic_dmg_wrapper import DMG_env_switchable,to_camel_case, ts_tuple
 
 import robomimic.utils.obs_utils as ObsUtils

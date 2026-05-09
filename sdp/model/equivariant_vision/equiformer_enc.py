@@ -383,45 +383,49 @@ class EquiFormerEnc(nn.Module):
         if self.norm is not None:
             node_dst.embedding = self.norm(node_dst.embedding)
 
-        # If the last pooling produced multiple destinations per batch (e.g., K gripper origins),
-        # aggregate per batch to keep one node per batch for downstream shaping.
-        if node_dst.embedding.shape[0] != batch_size:
-            # batch now indicates which samples belong to the same original batch element
-            s2_feat = torch.stack([node_dst.embedding[batch == b].mean(dim=0) for b in range(batch_size)], dim=0)
-        else:
-            s2_feat = node_dst.embedding
-        
-        # Calculate total proprioceptive features needed
-        total_proprio_features = 4 * self.n_proprio * self.n_robots
-        
-        # Create proprioceptive feature tensor
-        proprio = torch.zeros_like(s2_feat[..., :total_proprio_features])
-        
-        # Add robot0 features
-        proprio[:, 1:4, :3 * self.n_proprio] = ee_rot_vec_0  # 3x type1 irrep
-        proprio[:, 1:4, 3 * self.n_proprio:4 * self.n_proprio] = ee_pose_0  # 1x type1 irrep
-        proprio[:, 0, :2 * self.n_proprio] = ee_q_0  # 2x type2 irrep
-        
-        # Add robot1 features if available
-        if ee_rot_vec_1 is not None:
-            start_idx = 4 * self.n_proprio
-            proprio[:, 1:4, start_idx:start_idx + 3 * self.n_proprio] = ee_rot_vec_1  # 3x type1 irrep
-            proprio[:, 1:4, start_idx + 3 * self.n_proprio:start_idx + 4 * self.n_proprio] = ee_pose_1  # 1x type1 irrep
-            proprio[:, 0, start_idx:start_idx + 2 * self.n_proprio] = ee_q_1  # 2x type2 irrep
-        
-        s2_feat = torch.cat([s2_feat, proprio], dim=-1)
+        # Preserve per-arm destination nodes produced by AdaptiveOriginPool.
+        # With K origins per batch element, AdaptiveOriginPool orders destinations via
+        # repeat_interleave: (b0_arm0, b0_arm1, b1_arm0, b1_arm1, ...).
+        # A direct reshape recovers the (B, K, irrep, channels) structure.
+        K = node_dst.embedding.shape[0] // batch_size  # 1 for single-arm, 2 for dual-arm
+        s2_feat = node_dst.embedding.reshape(
+            batch_size, K, node_dst.embedding.shape[1], node_dst.embedding.shape[2]
+        )  # (B, K, irrep_dim, channels)
+
+        irrep_dim = s2_feat.shape[2]
+        n_prop = self.n_proprio
+
+        # Build per-arm proprio: each arm's features are injected into its own K-slot.
+        proprio = torch.zeros(
+            batch_size, K, irrep_dim, 4 * n_prop,
+            device=s2_feat.device, dtype=s2_feat.dtype,
+        )
+        # Arm 0
+        proprio[:, 0, 1:4, :3 * n_prop] = ee_rot_vec_0          # rotation matrix: (B, 3, 3*n_prop)
+        proprio[:, 0, 1:4, 3 * n_prop:4 * n_prop] = ee_pose_0   # EE position:     (B, 3, n_prop)
+        proprio[:, 0, 0, :2 * n_prop] = ee_q_0                   # gripper qpos:    (B, 2*n_prop)
+        # Arm 1 (dual-arm only)
+        if ee_rot_vec_1 is not None and K > 1:
+            proprio[:, 1, 1:4, :3 * n_prop] = ee_rot_vec_1
+            proprio[:, 1, 1:4, 3 * n_prop:4 * n_prop] = ee_pose_1
+            proprio[:, 1, 0, :2 * n_prop] = ee_q_1
+
+        s2_feat = torch.cat([s2_feat, proprio], dim=-1)  # (B, K, irrep_dim, channels + 4*n_prop)
 
         if not sanitycheck:
-            s2_feat = einops.rearrange(s2_feat, 'b irrep c -> b (c irrep)', b=batch_size)
+            s2_feat = einops.rearrange(s2_feat, 'b k irrep c -> b (k c irrep)', b=batch_size)
             return s2_feat
         else:
-            ########## If debug, outputs irrp1 (vector) ###########
-            vector = s2_feat.narrow(1, 1, 3)
+            ########## If debug, outputs irrp1 (vector) of arm 0 ###########
+            vector = s2_feat[:, 0].narrow(1, 1, 3)
             vector = einops.rearrange(vector, 'b d c -> b c d', b=batch_size)
             return vector
 
     def output_shape(self):
-        return self.c_dim * self.n_cam + 4 * self.n_proprio * self.n_robots  # plus 3 channel rot_mat and 1 channel position per robot
+        # Returns the number of irrep channels in the flattened encoder output.
+        # Each arm contributes (c_dim + 4*n_proprio) channels; there are n_robots arms.
+        # The actual tensor size is output_shape() * (lmax+1)^2 because of the irrep rearrange.
+        return self.n_robots * (self.c_dim + 4 * self.n_proprio)
 
     def _init_edge_rot_mat(self, edge_length_vec):
         # return init_edge_rot_mat(edge_length_vec)
