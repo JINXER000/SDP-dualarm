@@ -68,6 +68,87 @@ class TrainSTEPWorkspace:
         self.global_step = 0
         self.epoch = 0
 
+    def _log_point_cloud_sanity(self, wandb_run, dataset: BaseImageDataset):
+        """One-frame point cloud render + W&B log; raises RuntimeError if the frame is degenerate."""
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+
+        obs = dataset[0].get("obs")
+        if obs is None or "point_cloud" not in obs:
+            raise RuntimeError(
+                "Point cloud sanity check: dataset[0] has no obs['point_cloud']."
+            )
+        pc = obs["point_cloud"]
+        if hasattr(pc, "detach"):
+            pc = pc.detach().cpu().numpy()
+        else:
+            pc = np.asarray(pc, dtype=np.float32)
+        # Expected (T, N, C) after __getitem__
+        if pc.ndim != 3:
+            raise RuntimeError(
+                f"Point cloud sanity check: expected 3D array (T,N,C), got shape {pc.shape}."
+            )
+        frame = pc[0]
+        xyz = frame[:, :3].astype(np.float64)
+        n_pts = int(xyz.shape[0])
+        xyz_abs_sum = float(np.abs(xyz).sum())
+        spread = float((xyz.max(axis=0) - xyz.min(axis=0)).max())
+        has_nan = bool(np.isnan(xyz).any())
+        has_inf = bool(np.isinf(xyz).any())
+
+        sanity_dir = os.path.join(self.output_dir, "sanity")
+        os.makedirs(sanity_dir, exist_ok=True)
+        out_path = os.path.join(sanity_dir, "point_cloud_frame.png")
+
+        fig = plt.figure(figsize=(6, 5))
+        ax = fig.add_subplot(111, projection="3d")
+        if frame.shape[1] >= 6:
+            rgb = np.clip(frame[:, 3:6], 0.0, 1.0)
+        else:
+            rgb = np.full((n_pts, 3), 0.35, dtype=np.float64)
+        ax.scatter(xyz[:, 0], xyz[:, 1], xyz[:, 2], c=rgb, s=2, depthshade=False)
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+        ax.set_zlabel("z")
+        ax.set_title("dataset[0] point_cloud[0] (sanity)")
+        fig.tight_layout()
+        fig.savefig(out_path, dpi=120)
+        plt.close(fig)
+
+        caption = (
+            f"dataset index 0, first obs step | n_pts={n_pts} | "
+            f"xyz_abs_sum={xyz_abs_sum:.4g} | spread={spread:.4g}"
+        )
+        log_payload = {
+            "sanity/point_cloud_frame": wandb.Image(out_path, caption=caption),
+            "sanity/point_cloud_num_points": n_pts,
+            "sanity/point_cloud_xyz_abs_sum": xyz_abs_sum,
+            "sanity/point_cloud_xyz_spread": spread,
+            "sanity/point_cloud_xyz_min": float(xyz.min()),
+            "sanity/point_cloud_xyz_max": float(xyz.max()),
+            "sanity/point_cloud_has_nan": int(has_nan),
+            "sanity/point_cloud_has_inf": int(has_inf),
+        }
+        wandb_run.log(log_payload, step=self.global_step)
+
+        if has_nan or has_inf:
+            raise RuntimeError(
+                "Point cloud sanity check failed: NaN or Inf in obs['point_cloud'][0]. "
+                f"See metrics and {out_path}."
+            )
+        if xyz_abs_sum < 1e-12:
+            raise RuntimeError(
+                "Point cloud sanity check failed: all-zero XYZ (|.| sum < 1e-12). "
+                f"See metrics and {out_path}."
+            )
+        if spread < 1e-8:
+            raise RuntimeError(
+                "Point cloud sanity check failed: zero spatial spread (< 1e-8). "
+                f"See metrics and {out_path}."
+            )
+
     def run(self):
         cfg = copy.deepcopy(self.cfg)
         
@@ -157,6 +238,7 @@ class TrainSTEPWorkspace:
                 "output_dir": self.output_dir,
             }
         )
+        self._log_point_cloud_sanity(wandb_run, dataset)
 
         # configure checkpoint
         topk_manager = TopKCheckpointManager(

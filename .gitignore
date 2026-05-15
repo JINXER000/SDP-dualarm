@@ -18,3 +18,5 @@
 *.ply
 .specstory
 outputs/
+*tar.gz
+logs

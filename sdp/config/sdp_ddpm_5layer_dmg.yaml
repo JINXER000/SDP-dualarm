@@ -9,7 +9,7 @@ shape_meta: ${task.shape_meta}
 exp_name: "debug"
 
 task_name: two_arm_three_piece_assembly
-n_demo: 10
+n_demo: 50
 horizon: 16
 n_obs_steps: 2
 n_action_steps: 8
@@ -18,7 +18,7 @@ dataset_obs_steps: ${n_obs_steps}
 keypoint_visible_rate: 1.0
 obs_as_global_cond: True
 dataset_target: sdp.dataset.robomimic_replay_point_cloud_gripper_equal_scale_dataset.RobomimicReplayPointCloudGripperEqualScaleDataset
-dataset_path: /media/data5/yzchen/imitation_learning/dexmimicgen/datasets/generated/${task_name}_pc_abs.hdf5
+dataset_path: data/robomimic/datasets/generated/${task_name}_pc_abs.hdf5
 
 policy:
   _target_: sdp.policy.step.STEP
@@ -120,8 +120,8 @@ training:
   num_epochs: ${eval:'round(50000 / ${n_demo})'}
   gradient_accumulate_every: 1
   use_ema: True
-  rollout_every: ${eval:'round(1000 / ${n_demo})'}
-  checkpoint_every: ${eval:'round(1000 / ${n_demo})'}
+  rollout_every: ${eval:'round(5000 / ${n_demo})'}
+  checkpoint_every: ${eval:'round(5000 / ${n_demo})'}
   val_every: 1
   sample_every: 5
   max_train_steps: null
