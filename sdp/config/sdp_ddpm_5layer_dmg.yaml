@@ -9,7 +9,7 @@ shape_meta: ${task.shape_meta}
 exp_name: "debug"
 
 task_name: two_arm_three_piece_assembly
-n_demo: 50
+n_demo: 1000
 horizon: 16
 n_obs_steps: 2
 n_action_steps: 8
@@ -51,9 +51,9 @@ policy:
   num_distance_basis: [128, 128, 128, 128, 128]
   diffusion_step_embed_dim: 128
   down_dims:
-  - 100
   - 200
   - 400
+  - 800
   encoder_output_dim: 128
   horizon: ${horizon}
   kernel_size: 5

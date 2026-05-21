@@ -81,7 +81,7 @@ class RobomimicImageRunner(BaseImageRunner):
         env_meta = copy.deepcopy(FileUtils.get_env_metadata_from_dataset(
             dataset_path))
         # Drop instance segmentation so EnvRobosuite does not emit per-object *_{point_cloud} keys.
-        env_meta['env_kwargs'].pop('camera_segmentations', None)
+        env_meta['env_kwargs'].setdefault('camera_segmentations', None)
         # Aggregated workspace point cloud (+ voxels) for shape_meta key `point_cloud`.
         env_meta['env_kwargs']['output_all_pcds'] = True
         # disable object state observation
